@@ -1,0 +1,120 @@
+{
+  "network": "studionet",
+  "rpc": "https://studio.genlayer.com/api",
+  "explorer_base": "https://genlayer-explorer.vercel.app",
+  "deployer_address": "0x3de43AA2f7162c80af98abe78222aE0Cdf83c506",
+  "contract_path": "contracts\\multi_source_price_guard.py",
+  "local_sha256": "9ac303f5a67638edd3ba1a711d5cf9dfa94c48af648cf160dfd8a4196273e1f3",
+  "generated_at": "2026-10-14T20:08:37.136885Z",
+  "transactions": [
+    {
+      "label": "deploy",
+      "tx_hash": "0xbea6b6a04c22762ccf18409f945a4f11e7900b21fe8d6700c3833339541825a3",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "SUCCESS",
+      "readable_return": "null",
+      "decoded_return": null,
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0xbea6b6a04c22762ccf18409f945a4f11e7900b21fe8d6700c3833339541825a3",
+      "verified_finalized": true,
+      "expected_success": true,
+      "matches_expectation": true
+    },
+    {
+      "label": "register_feed",
+      "tx_hash": "0xca7fe7c0274657e02b9c942f2e0a6c824525672fdd67d172a59ecfa67cc053ee",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "SUCCESS",
+      "readable_return": "1",
+      "decoded_return": 1,
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0xca7fe7c0274657e02b9c942f2e0a6c824525672fdd67d172a59ecfa67cc053ee",
+      "verified_finalized": true,
+      "expected_success": true,
+      "matches_expectation": true
+    },
+    {
+      "label": "submit_accepted",
+      "tx_hash": "0x3cc5a2713596c8238ece7eda67d8c40d87a4fab064c608cc49537fe31dc6f72b",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "SUCCESS",
+      "readable_return": "\"ACCEPTED\"",
+      "decoded_return": "ACCEPTED",
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0x3cc5a2713596c8238ece7eda67d8c40d87a4fab064c608cc49537fe31dc6f72b",
+      "verified_finalized": true,
+      "expected_success": true,
+      "matches_expectation": true
+    },
+    {
+      "label": "submit_spread_trip",
+      "tx_hash": "0x04218a581eb5b4539cbf347796f0158e21133ffc768726be66997513e509660c",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "SUCCESS",
+      "readable_return": "\"CIRCUIT_BROKEN_SPREAD\"",
+      "decoded_return": "CIRCUIT_BROKEN_SPREAD",
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0x04218a581eb5b4539cbf347796f0158e21133ffc768726be66997513e509660c",
+      "verified_finalized": true,
+      "expected_success": true,
+      "matches_expectation": true
+    },
+    {
+      "label": "rollback_while_broken",
+      "tx_hash": "0x6e548b96cb1a4d7257d19f87ce69ddcb5ce739d374552df398e59d36ccfc1067",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "ERROR",
+      "readable_return": "[EXPECTED] circuit breaker is tripped",
+      "decoded_return": "[EXPECTED] circuit breaker is tripped",
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0x6e548b96cb1a4d7257d19f87ce69ddcb5ce739d374552df398e59d36ccfc1067",
+      "verified_finalized": true,
+      "expected_success": false,
+      "matches_expectation": true
+    },
+    {
+      "label": "reset_circuit_breaker",
+      "tx_hash": "0xbb77ba25b5e268e5787195e863b96e2d993d9af82e38cd20d1366ddaf50d1b5e",
+      "status_name": "FINALIZED",
+      "consensus_result": "MAJORITY_AGREE",
+      "execution_result": "SUCCESS",
+      "readable_return": "null",
+      "decoded_return": null,
+      "explorer_url": "https://genlayer-explorer.vercel.app/#/tx/0xbb77ba25b5e268e5787195e863b96e2d993d9af82e38cd20d1366ddaf50d1b5e",
+      "verified_finalized": true,
+      "expected_success": true,
+      "matches_expectation": true
+    }
+  ],
+  "contract_address": "0x66fCD584e6A2452edD166831cCd0f6f416b22c51",
+  "onchain_sha256": "9ac303f5a67638edd3ba1a711d5cf9dfa94c48af648cf160dfd8a4196273e1f3",
+  "sha256_identity": true,
+  "final_state": {
+    "get_feed": {
+      "active": true,
+      "circuit_broken": false,
+      "feed_id": 1,
+      "max_jump_bps": 200,
+      "max_spread_bps": 100,
+      "primary_url": "https://source-a.example/eth-usd",
+      "secondary_url": "https://source-b.example/eth-usd",
+      "symbol": "ETH/USD"
+    },
+    "get_latest_safe_price": {
+      "circuit_broken": false,
+      "feed_id": 1,
+      "is_safe_to_consume": true,
+      "latest_price": 250000000000,
+      "rounds_count": 2
+    },
+    "get_guard_summary": {
+      "accepted_rounds": 1,
+      "active_feeds": 1,
+      "circuit_broken_feeds": 0,
+      "total_feeds": 1,
+      "total_rounds": 2,
+      "tripped_rounds": 1
+    }
+  },
+  "all_transactions_finalized": true
+}
