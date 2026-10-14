@@ -169,25 +169,27 @@ flag, not on the raw number.
 
 The contract was deployed and driven through real transactions on GenLayer
 studionet. Every transaction reached `FINALIZED` with consensus `MAJORITY_AGREE`,
-and the deployed bytecode source was confirmed byte-for-byte against this
-repository file through `gen_getContractCode` (sha256 identity true). The full
-machine-readable proof is in `evidence/studionet_deployment.json`.
+and the deployed source was confirmed byte-for-byte against this repository file
+through `gen_getContractCode` (sha256 identity true). The line endings are pinned
+to LF via `.gitattributes`, so the on-chain sha256 also equals the file as served
+by the remote repository. The full machine-readable proof is in
+`evidence/studionet_deployment.json`.
 
 ```
-Contract address: 0x66fCD584e6A2452edD166831cCd0f6f416b22c51
-Deploy tx:        0xbea6b6a04c22762ccf18409f945a4f11e7900b21fe8d6700c3833339541825a3
-Source sha256:    9ac303f5a67638edd3ba1a711d5cf9dfa94c48af648cf160dfd8a4196273e1f3
+Contract address: 0xDe047473fb6C9dCf6065325FEa5e2409Bef0c768
+Deploy tx:        0x9222be5ed4848dcdc574381746312cbbe470eff07a2c1405220f28ad3fe0f687
+Source sha256:    92065e428d8d7b85a3d59b6b2ecc12b2bcc2340d03c0fecba68cba3b38b5f10c
 ```
 
 Scenario transactions, all `FINALIZED`:
 
 | Step | Result | Tx hash |
 | --- | --- | --- |
-| register_feed | `1` | `0xca7fe7c0274657e02b9c942f2e0a6c824525672fdd67d172a59ecfa67cc053ee` |
-| submit accepted (ETH 2500/2500) | `ACCEPTED` | `0x3cc5a2713596c8238ece7eda67d8c40d87a4fab064c608cc49537fe31dc6f72b` |
-| submit spread breach (2500/1000) | `CIRCUIT_BROKEN_SPREAD` | `0x04218a581eb5b4539cbf347796f0158e21133ffc768726be66997513e509660c` |
-| blocked update while broken (expected rollback) | reverted: `[EXPECTED] circuit breaker is tripped` | `0x6e548b96cb1a4d7257d19f87ce69ddcb5ce739d374552df398e59d36ccfc1067` |
-| reset_circuit_breaker (owner) | success | `0xbb77ba25b5e268e5787195e863b96e2d993d9af82e38cd20d1366ddaf50d1b5e` |
+| register_feed | `1` | `0x3b948f7c2f255e03eba6b05c7d873245c868d7d50052df709bfeacd6aa38a155` |
+| submit accepted (ETH 2500/2500) | `ACCEPTED` | `0x164c3c3f9edfb4f7b7da5a2247de2d4e978da58169bb654d077e65c652329b92` |
+| submit spread breach (2500/1000) | `CIRCUIT_BROKEN_SPREAD` | `0x84c3a1f1e72cde8de9a0d08b47f8d6257bbdcd45125336c4e63f49988cc88406` |
+| blocked update while broken (expected rollback) | reverted: `[EXPECTED] circuit breaker is tripped` | `0x02c707e2c0f0ca8cef30d2f68ad045827e2adbd193fb4cff490a709e9c204db4` |
+| reset_circuit_breaker (owner) | success | `0xf6d6ffaa702d5e0c24700d89dbde5b2b777716ec6de1275119cd6e9bb01239e3` |
 
 After the spread breach, `get_latest_safe_price` on chain still reported
 `latest_price = 250000000000`, `circuit_broken = true`, and

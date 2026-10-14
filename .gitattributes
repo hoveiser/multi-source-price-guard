@@ -1,0 +1,11 @@
+# Normalize line endings so the committed source is byte-for-byte reproducible
+# across platforms and matches the code deployed on chain.
+* text=auto eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.example text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
