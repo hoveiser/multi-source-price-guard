@@ -12,6 +12,14 @@ PRICE_SCALE: int = 100000000
 # Hard ceiling for both guard thresholds, in basis points.
 MAX_BPS_LIMIT: int = 5000
 
+# Bounds for caller-supplied text and fetched prices.
+MIN_URL_LEN: int = 8
+MAX_URL_LEN: int = 512
+MAX_SYMBOL_LEN: int = 32
+MAX_NOTE_LEN: int = 256
+# Upper bound for a single scaled price accepted from the oracle path.
+MAX_SCALED_PRICE: int = 10 ** 18
+
 # Error classification prefixes so validators can compare failure paths.
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_EXTERNAL = "[EXTERNAL]"
@@ -44,10 +52,31 @@ class PriceRound:
 
 
 def _is_http_url(url: str) -> bool:
-    """Accept only absolute http(s) URLs."""
+    """Absolute http(s) URL with bounded length and no whitespace or control bytes."""
     if not isinstance(url, str):
         return False
-    return url.startswith("http://") or url.startswith("https://")
+    if len(url) < MIN_URL_LEN or len(url) > MAX_URL_LEN:
+        return False
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return False
+    for ch in url:
+        code = ord(ch)
+        # Reject control bytes, space, and DEL or higher to avoid injection vectors.
+        if code <= 32 or code >= 127:
+            return False
+    return True
+
+
+def _to_address(value: str) -> Address:
+    """Parse a 0x-prefixed 20-byte hex address string into an Address."""
+    if not isinstance(value, str):
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} keeper address must be a string")
+    if not value.startswith("0x") or len(value) != 42:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} keeper address must be 42 hex chars")
+    for ch in value[2:]:
+        if ch not in "0123456789abcdefABCDEF":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} keeper address has non-hex chars")
+    return Address(value)
 
 
 def _as_text(resp) -> str:
@@ -123,11 +152,13 @@ class MultiSourcePriceGuard(gl.Contract):
     latest_price: TreeMap[u256, u256]
     rounds: TreeMap[u256, PriceRound]
     feed_rounds: TreeMap[u256, DynArray[u256]]
+    authorized_keepers: TreeMap[Address, bool]
 
     def __init__(self):
         self.owner = gl.message.sender_address
         self.next_feed_id = u256(1)
         self.next_round_id = u256(1)
+        self.authorized_keepers[self.owner] = True
 
     @gl.public.write
     def register_feed(
@@ -140,12 +171,16 @@ class MultiSourcePriceGuard(gl.Contract):
     ) -> u256:
         if gl.message.sender_address != self.owner:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner can register a feed")
-        if not isinstance(symbol, str) or symbol.strip() == "":
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} symbol must be non-empty")
+        if not isinstance(symbol, str) or symbol.strip() == "" or len(symbol) > MAX_SYMBOL_LEN:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} symbol must be 1..32 chars")
         if not _is_http_url(primary_url):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} primary_url must be http(s)")
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} primary_url must be http(s), 8..512 chars, no whitespace"
+            )
         if not _is_http_url(secondary_url):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} secondary_url must be http(s)")
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} secondary_url must be http(s), 8..512 chars, no whitespace"
+            )
         if primary_url == secondary_url:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} URLs must be distinct")
         if max_spread_bps <= 0 or max_spread_bps > MAX_BPS_LIMIT:
@@ -175,6 +210,13 @@ class MultiSourcePriceGuard(gl.Contract):
         source_b_scaled: u256,
         note: str,
     ) -> str:
+        # Keeper griefing gate: only the owner or an explicitly authorized keeper may
+        # push deterministic quotes. Anyone else reverts before touching state.
+        sender = gl.message.sender_address
+        if sender != self.owner and not self.authorized_keepers.get(sender, False):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} caller is not an authorized keeper")
+        if not isinstance(note, str) or len(note) > MAX_NOTE_LEN:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} note must be at most 256 chars")
         # Deterministic keeper path: the exact same guard accounting runs as the
         # live fetch path, with no nondeterministic input to trust.
         return self._apply_quotes(
@@ -220,11 +262,11 @@ class MultiSourcePriceGuard(gl.Contract):
             parsed = _parse_json_object(raw)
             sa = _coerce_scaled_price(parsed.get("source_a_scaled"))
             sb = _coerce_scaled_price(parsed.get("source_b_scaled"))
-            attestation = str(parsed.get("attestation_note", ""))[:500]
+            attestation = str(parsed.get("attestation_note", ""))[:MAX_NOTE_LEN]
             if sa <= 0 or sb <= 0:
-                raise gl.vm.UserError(
-                    f"{ERROR_EXTERNAL} sources did not yield positive prices"
-                )
+                raise gl.vm.UserError(f"{ERROR_LLM} scaled price is not positive")
+            if sa > MAX_SCALED_PRICE or sb > MAX_SCALED_PRICE:
+                raise gl.vm.UserError(f"{ERROR_LLM} scaled price is out of range")
             return {
                 "source_a_scaled": sa,
                 "source_b_scaled": sb,
@@ -244,7 +286,7 @@ class MultiSourcePriceGuard(gl.Contract):
 
         a = u256(int(agreed["source_a_scaled"]))
         b = u256(int(agreed["source_b_scaled"]))
-        note = str(agreed["attestation_note"])
+        note = str(agreed["attestation_note"])[:MAX_NOTE_LEN]
         # Feed the agreed values through the identical deterministic guard engine.
         return self._apply_quotes(feed_id, a, b, note)
 
@@ -256,6 +298,23 @@ class MultiSourcePriceGuard(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} feed not found")
         feed = self.feeds[feed_id]
         feed.circuit_broken = False
+        self.feeds[feed_id] = feed
+
+    @gl.public.write
+    def set_keeper(self, keeper: str, allowed: bool) -> None:
+        if gl.message.sender_address != self.owner:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner can manage keepers")
+        addr = _to_address(keeper)
+        self.authorized_keepers[addr] = allowed
+
+    @gl.public.write
+    def set_feed_active(self, feed_id: u256, active: bool) -> None:
+        if gl.message.sender_address != self.owner:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only owner can change feed activity")
+        if feed_id not in self.feeds:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} feed not found")
+        feed = self.feeds[feed_id]
+        feed.active = active
         self.feeds[feed_id] = feed
 
     def _apply_quotes(

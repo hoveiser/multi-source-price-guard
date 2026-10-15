@@ -169,7 +169,7 @@ def main() -> int:
     if onchain_sha256 != local_sha256:
         raise SystemExit("deployed code does not match local source")
 
-    # Scenario: register a feed.
+    # Scenario: register a feed (owner only).
     reg_hash = client.write_contract(
         contract_address,
         "register_feed",
@@ -179,16 +179,33 @@ def main() -> int:
     reg_entry = record("register_feed", reg_hash, expect_success=True)
     feed_id = int(reg_entry["decoded_return"])
 
-    # Accepted deterministic quote seeds the trusted price.
+    # Owner authorizes a dedicated keeper address.
+    keeper = Account.create()
+    setk_hash = client.write_contract(
+        contract_address, "set_keeper", args=[keeper.address, True], account=account
+    )
+    record("set_keeper_grant", setk_hash, expect_success=True)
+
+    # Accepted deterministic quote is pushed by the authorized keeper.
     acc_hash = client.write_contract(
         contract_address,
         "submit_deterministic_quote",
         args=[feed_id, ETH_2500, ETH_2500, "keeper seed"],
-        account=account,
+        account=keeper,
     )
-    acc_entry = record("submit_accepted", acc_hash, expect_success=True)
+    acc_entry = record("keeper_submit_accepted", acc_hash, expect_success=True)
     if acc_entry["decoded_return"] != "ACCEPTED":
-        raise SystemExit("seed quote was not accepted")
+        raise SystemExit("keeper seed quote was not accepted")
+
+    # Expected rollback: a stranger who is not a keeper cannot submit.
+    stranger = Account.create()
+    unauth_hash = client.write_contract(
+        contract_address,
+        "submit_deterministic_quote",
+        args=[feed_id, ETH_2500, ETH_2500, "unauthorized"],
+        account=stranger,
+    )
+    record("rollback_unauthorized_keeper", unauth_hash, expect_success=False)
 
     # Spread breach trips the breaker and must not poison latest_price.
     trip_hash = client.write_contract(
@@ -209,20 +226,30 @@ def main() -> int:
     if safe["is_safe_to_consume"] is not False:
         raise SystemExit("invariant broken: a tripped feed reported itself as safe")
 
-    # Expected rollback: any update while the breaker is tripped must revert.
-    rb_hash = client.write_contract(
-        contract_address,
-        "submit_deterministic_quote",
-        args=[feed_id, ETH_2500, ETH_2500, "blocked while broken"],
-        account=account,
-    )
-    record("rollback_while_broken", rb_hash, expect_success=False)
-
-    # Owner resets the breaker and the feed becomes usable again.
+    # Owner resets the breaker.
     reset_hash = client.write_contract(
         contract_address, "reset_circuit_breaker", args=[feed_id], account=account
     )
     record("reset_circuit_breaker", reset_hash, expect_success=True)
+
+    # Owner deactivates the feed; a quote then reverts because it is inactive.
+    deact_hash = client.write_contract(
+        contract_address, "set_feed_active", args=[feed_id, False], account=account
+    )
+    record("set_feed_active_false", deact_hash, expect_success=True)
+    inactive_hash = client.write_contract(
+        contract_address,
+        "submit_deterministic_quote",
+        args=[feed_id, ETH_2500, ETH_2500, "while inactive"],
+        account=account,
+    )
+    record("rollback_while_inactive", inactive_hash, expect_success=False)
+
+    # Owner reactivates the feed and consumption resumes.
+    react_hash = client.write_contract(
+        contract_address, "set_feed_active", args=[feed_id, True], account=account
+    )
+    record("set_feed_active_true", react_hash, expect_success=True)
 
     # Final on-chain state snapshot.
     evidence["final_state"] = {

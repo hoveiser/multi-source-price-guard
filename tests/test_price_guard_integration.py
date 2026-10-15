@@ -46,6 +46,10 @@ def test_full_guard_scenario_on_studionet():
     feed_id = int(_decoded_return(register_receipt))
     assert feed_id == 1
 
+    # Owner authorizes a keeper address on chain.
+    grant = contract.set_keeper(args=["0x" + "11" * 20, True]).transact()
+    assert tx_execution_succeeded(grant)
+
     accepted = contract.submit_deterministic_quote(
         args=[feed_id, ETH_2500, ETH_2500, "keeper seed"]
     ).transact()
@@ -80,6 +84,16 @@ def test_full_guard_scenario_on_studionet():
 
     recovered = contract.get_latest_safe_price(args=[feed_id]).call()
     assert recovered["circuit_broken"] is False
+
+    # Owner deactivates, a quote reverts while inactive, then owner reactivates.
+    deact = contract.set_feed_active(args=[feed_id, False]).transact()
+    assert tx_execution_succeeded(deact)
+    inactive = contract.submit_deterministic_quote(
+        args=[feed_id, ETH_2500, ETH_2500, "inactive"]
+    ).transact()
+    assert not tx_execution_succeeded(inactive)
+    react = contract.set_feed_active(args=[feed_id, True]).transact()
+    assert tx_execution_succeeded(react)
 
     summary = contract.get_guard_summary().call()
     assert int(summary["total_feeds"]) == 1

@@ -130,6 +130,7 @@ feeds: TreeMap[u256, FeedConfig]
 latest_price: TreeMap[u256, u256]
 rounds: TreeMap[u256, PriceRound]
 feed_rounds: TreeMap[u256, DynArray[u256]]
+authorized_keepers: TreeMap[Address, bool]
 ```
 
 ## Public interface
@@ -137,8 +138,10 @@ feed_rounds: TreeMap[u256, DynArray[u256]]
 | Method | Kind | Access | Purpose |
 | --- | --- | --- | --- |
 | `register_feed(symbol, primary_url, secondary_url, max_spread_bps, max_jump_bps) -> u256` | write | owner | Create a feed, returns its id. |
-| `submit_deterministic_quote(feed_id, source_a_scaled, source_b_scaled, note) -> str` | write | any keeper | Run the guard engine on supplied quotes. |
+| `submit_deterministic_quote(feed_id, source_a_scaled, source_b_scaled, note) -> str` | write | owner or authorized keeper | Run the guard engine on supplied quotes. |
 | `fetch_and_verify_live_price(feed_id) -> str` | write | any caller | Fetch both URLs, reach comparative consensus, run the guard engine. |
+| `set_keeper(keeper, allowed) -> None` | write | owner | Grant or revoke an address as an authorized keeper. |
+| `set_feed_active(feed_id, active) -> None` | write | owner | Pause or resume a feed without tripping the breaker. |
 | `reset_circuit_breaker(feed_id) -> None` | write | owner | Clear `circuit_broken` for a feed. |
 | `get_feed(feed_id) -> dict` | view | read | Full feed configuration. |
 | `get_round(round_id) -> dict` | view | read | One recorded round with its status and reporter. |
@@ -151,12 +154,17 @@ flag, not on the raw number.
 
 ## Limitations
 
-- `submit_deterministic_quote` is open to any caller. It models an open keeper
-  set. An adversarial keeper can trip the breaker but cannot forge an `ACCEPTED`
-  price beyond the two invariants, because the guard math is identical for every
-  caller. Production deployments should add a keeper allowlist.
-- `active = false` is never set by the current interface, so pausing without
-  tripping the breaker is not supported. Use the breaker and `reset_circuit_breaker`.
+- `submit_deterministic_quote` is gated to the owner or an address in
+  `authorized_keepers`, managed by the owner-only `set_keeper`. An unauthorized
+  caller reverts before any state write, so the griefing vector of spamming quotes
+  or forcing a breaker trip is closed.
+- A feed can be paused with owner-only `set_feed_active(feed_id, false)` and
+  resumed with `true`. While inactive, both the deterministic and live update paths
+  revert and the consumed price is frozen.
+- Input strings are length-bounded at every write entry point: `symbol` is 1..32
+  chars, URLs are 8..512 chars with no whitespace or control bytes, and notes are
+  capped at 256 chars (LLM output truncated to fit). Fetched prices must satisfy
+  `0 < price <= 10^18` or the update reverts with a deterministic error.
 - Feeds and rounds are permanent; there is no delete path. This preserves audit
   history at the cost of unbounded round growth.
 - `get_guard_summary` and `get_latest_safe_price` iterate feeds and rounds, so
@@ -176,26 +184,31 @@ by the remote repository. The full machine-readable proof is in
 `evidence/studionet_deployment.json`.
 
 ```
-Contract address: 0xDe047473fb6C9dCf6065325FEa5e2409Bef0c768
-Deploy tx:        0x9222be5ed4848dcdc574381746312cbbe470eff07a2c1405220f28ad3fe0f687
-Source sha256:    92065e428d8d7b85a3d59b6b2ecc12b2bcc2340d03c0fecba68cba3b38b5f10c
+Contract address: 0x7a4eD4eA7d5a2A4c8b3727A74e3f5625e789Bc55
+Deploy tx:        0xd38eda48dc8d4640b15e58ba35ee501a73484f5ce6ea29891dd2e51a518029f2
+Source sha256:    7793dfac5091042baf0026f430706eb33d035b317a60e8cb81fb5eddffad69ed
 ```
 
 Scenario transactions, all `FINALIZED`:
 
 | Step | Result | Tx hash |
 | --- | --- | --- |
-| register_feed | `1` | `0x3b948f7c2f255e03eba6b05c7d873245c868d7d50052df709bfeacd6aa38a155` |
-| submit accepted (ETH 2500/2500) | `ACCEPTED` | `0x164c3c3f9edfb4f7b7da5a2247de2d4e978da58169bb654d077e65c652329b92` |
-| submit spread breach (2500/1000) | `CIRCUIT_BROKEN_SPREAD` | `0x84c3a1f1e72cde8de9a0d08b47f8d6257bbdcd45125336c4e63f49988cc88406` |
-| blocked update while broken (expected rollback) | reverted: `[EXPECTED] circuit breaker is tripped` | `0x02c707e2c0f0ca8cef30d2f68ad045827e2adbd193fb4cff490a709e9c204db4` |
-| reset_circuit_breaker (owner) | success | `0xf6d6ffaa702d5e0c24700d89dbde5b2b777716ec6de1275119cd6e9bb01239e3` |
+| register_feed | `1` | `0xec32985246ff1c21d9d4216b654b7dcc2db2bfd35581613d4eb76544a85ed10f` |
+| set_keeper grant (owner) | success | `0xc43804b803248f8a7cabb2010638ff28f04a4e01f5d420726f6f8868e6a880cf` |
+| authorized keeper submit accepted | `ACCEPTED` | `0xd806f3f89682505310c2315ac74c670483972b9f55e06fe76c22c0eba74715a4` |
+| unauthorized submit (expected rollback) | reverted: `[EXPECTED] caller is not an authorized keeper` | `0x3d0bb76212405eb5a3a9f5d65914f526298f3a5e34e4bfe9e8bdc9571ff1ee16` |
+| submit spread breach (2500/1000) | `CIRCUIT_BROKEN_SPREAD` | `0x41ec560501607005d3d51bb93c8c0724e9eaae6016c069b46fa31733598a9f04` |
+| reset_circuit_breaker (owner) | success | `0x09af32b36a671bf6efadf3121bf39eacc872271f467e101c164864adc22498e9` |
+| set_feed_active false (owner) | success | `0xb7dc2efd1e4c522677c0d528d367db82171cc890adb9b716bfa05dbe08028b69` |
+| submit while inactive (expected rollback) | reverted: `[EXPECTED] feed is inactive` | `0xd898f0ebdd78fe0cabc31411e0a7ab2dd8dfe94dbac249c5fc13c0c8de5e1dc4` |
+| set_feed_active true (owner) | success | `0x08077c16136fb775a39bdc7269d39b2808e8fce8fb4d07571ad091fae2a8a82a` |
 
 After the spread breach, `get_latest_safe_price` on chain still reported
 `latest_price = 250000000000`, `circuit_broken = true`, and
 `is_safe_to_consume = false`, which proves the poisoned midpoint never reached the
-consumed price. The final `get_guard_summary` reported 1 feed, 2 rounds, 1 accepted,
-and 1 tripped.
+consumed price. The two expected rollbacks finalized with consensus agreement yet
+reverted execution, leaving state unchanged. The final `get_guard_summary` reported
+1 feed, 2 rounds, 1 accepted, and 1 tripped.
 
 ## Toolchain and runner pin
 
@@ -233,7 +246,7 @@ gltest tests/test_price_guard_integration.py --network studionet -v -s
 
 ```
 contracts/multi_source_price_guard.py   the primitive
-tests/test_price_guard_direct.py        26 direct-mode tests
+tests/test_price_guard_direct.py        39 direct-mode tests
 tests/test_price_guard_integration.py   full-consensus studionet run
 tests/conftest.py                        direct-mode VM shim for Windows
 scripts/deploy_studionet.py             deploy, drive, and record evidence

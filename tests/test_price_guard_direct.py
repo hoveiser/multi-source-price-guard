@@ -18,6 +18,13 @@ PRIMARY = "https://source-a.test/eth-usd"
 SECONDARY = "https://source-b.test/eth-usd"
 
 
+def addr_hex(addr) -> str:
+    """Render a test fixture address (raw bytes or Address) as a 0x hex string."""
+    if isinstance(addr, (bytes, bytearray)):
+        return "0x" + bytes(addr).hex()
+    return addr.as_hex
+
+
 def deploy_guard(direct_deploy):
     """Deploy with the default sender, which becomes the owner."""
     return direct_deploy(CONTRACT_PATH)
@@ -72,7 +79,7 @@ def test_register_feed_identical_urls_reverts(direct_vm, direct_deploy, direct_o
 def test_register_feed_empty_symbol_reverts(direct_vm, direct_deploy, direct_owner):
     contract = deploy_guard(direct_deploy)
     direct_vm.sender = direct_owner
-    with direct_vm.expect_revert("non-empty"):
+    with direct_vm.expect_revert("symbol"):
         contract.register_feed("   ", PRIMARY, SECONDARY, 100, 200)
 
 
@@ -301,7 +308,7 @@ def test_fetch_non_positive_hallucination_reverts(direct_vm, direct_deploy, dire
     contract = deploy_guard(direct_deploy)
     feed_id = register(direct_vm, contract, direct_owner, spread=100)
     _mock_fetch(direct_vm, 0, ETH_2500, "bad extraction")
-    with direct_vm.expect_revert("positive prices"):
+    with direct_vm.expect_revert("not positive"):
         contract.fetch_and_verify_live_price(feed_id)
 
 
@@ -311,4 +318,136 @@ def test_fetch_blocked_while_broken(direct_vm, direct_deploy, direct_owner):
     contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_1000, "trip")
     _mock_fetch(direct_vm, ETH_2500, ETH_2500, "ignored")
     with direct_vm.expect_revert("circuit breaker is tripped"):
+        contract.fetch_and_verify_live_price(feed_id)
+
+
+# --------------------------------------------------------------------------
+# Keeper authorization (griefing gate)
+# --------------------------------------------------------------------------
+
+
+def test_submit_unauthorized_caller_reverts(direct_vm, direct_deploy, direct_owner, direct_bob):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("authorized keeper"):
+        contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "as bob")
+
+
+def test_set_keeper_grant_and_revoke(direct_vm, direct_deploy, direct_owner, direct_bob):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner)
+    # Bob is not a keeper yet.
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("authorized keeper"):
+            contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "before grant")
+    # Owner grants bob.
+    contract.set_keeper(addr_hex(direct_bob), True)
+    with direct_vm.prank(direct_bob):
+        assert contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "after grant") == "ACCEPTED"
+    # Owner revokes bob.
+    contract.set_keeper(addr_hex(direct_bob), False)
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("authorized keeper"):
+            contract.submit_deterministic_quote(feed_id, ETH_2510, ETH_2510, "after revoke")
+
+
+def test_set_keeper_non_owner_reverts(direct_vm, direct_deploy, direct_owner, direct_bob):
+    contract = deploy_guard(direct_deploy)
+    register(direct_vm, contract, direct_owner)
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only owner can manage keepers"):
+            contract.set_keeper(addr_hex(direct_owner), True)
+
+
+def test_set_keeper_invalid_address_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    register(direct_vm, contract, direct_owner)
+    with direct_vm.expect_revert("keeper address"):
+        contract.set_keeper("not-an-address", True)
+    with direct_vm.expect_revert("keeper address"):
+        contract.set_keeper("0x123", True)
+
+
+# --------------------------------------------------------------------------
+# Feed active lifecycle (no dead field)
+# --------------------------------------------------------------------------
+
+
+def test_set_feed_active_blocks_and_restores(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner)
+    contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "seed")
+    contract.set_feed_active(feed_id, False)
+    assert contract.get_feed(feed_id)["active"] is False
+    with direct_vm.expect_revert("feed is inactive"):
+        contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "blocked")
+    assert contract.get_latest_safe_price(feed_id)["is_safe_to_consume"] is False
+    contract.set_feed_active(feed_id, True)
+    assert contract.submit_deterministic_quote(feed_id, ETH_2510, ETH_2510, "restored") == "ACCEPTED"
+
+
+def test_set_feed_active_non_owner_reverts(direct_vm, direct_deploy, direct_owner, direct_bob):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner)
+    with direct_vm.prank(direct_bob):
+        with direct_vm.expect_revert("Only owner can change feed activity"):
+            contract.set_feed_active(feed_id, False)
+
+
+def test_set_feed_active_unknown_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    register(direct_vm, contract, direct_owner)
+    with direct_vm.expect_revert("feed not found"):
+        contract.set_feed_active(99, False)
+
+
+# --------------------------------------------------------------------------
+# String length and URL hygiene bounds
+# --------------------------------------------------------------------------
+
+
+def test_register_symbol_too_long_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("symbol"):
+        contract.register_feed("S" * 33, PRIMARY, SECONDARY, 100, 200)
+
+
+def test_register_url_too_long_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    direct_vm.sender = direct_owner
+    long_url = "https://a.test/" + "p" * 600
+    with direct_vm.expect_revert("primary_url"):
+        contract.register_feed("ETH/USD", long_url, SECONDARY, 100, 200)
+
+
+def test_register_url_too_short_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("primary_url"):
+        contract.register_feed("ETH/USD", "http://", SECONDARY, 100, 200)
+
+
+def test_register_url_with_whitespace_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("primary_url"):
+        contract.register_feed("ETH/USD", "https://a.test/eth usd", SECONDARY, 100, 200)
+    with direct_vm.expect_revert("primary_url"):
+        contract.register_feed("ETH/USD", "https://a.test/eth\nusd", SECONDARY, 100, 200)
+
+
+def test_submit_note_too_long_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner)
+    with direct_vm.expect_revert("note"):
+        contract.submit_deterministic_quote(feed_id, ETH_2500, ETH_2500, "n" * 257)
+
+
+def test_fetch_out_of_range_price_reverts(direct_vm, direct_deploy, direct_owner):
+    contract = deploy_guard(direct_deploy)
+    feed_id = register(direct_vm, contract, direct_owner, spread=100)
+    _mock_fetch(direct_vm, 2 * 10 ** 18, ETH_2500, "huge")
+    with direct_vm.expect_revert("out of range"):
         contract.fetch_and_verify_live_price(feed_id)
